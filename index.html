@@ -21,10 +21,11 @@
   .bar{position:absolute;z-index:4;top:8px;right:8px;display:flex;gap:6px}
   #vr:not(.one) .bar{right:auto;left:50%;transform:translateX(-50%)}
   .bar button{font:inherit;font-size:14px;padding:8px 12px;border:0;border-radius:8px;background:rgba(0,0,0,.6);color:#fff}
+.hint{position:absolute;z-index:4;top:50%;left:50%;transform:translate(-50%,-50%);font-size:22px;color:#ff6;pointer-events:none}
 </style>
 
 <div id="ui">
-  <div>Paste a YouTube link, then tap Start. (v4)</div>
+  <div>Paste a YouTube link, then tap Start. (v5)</div>
   <input id="link" type="url" placeholder="https://youtube.com/watch?v=...">
   <button id="go">Start</button>
 </div>
@@ -42,12 +43,12 @@ const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const FOV = 65 * Math.PI / 180;      // camera horizontal field of view: tweak if the pinned screen drifts against the room
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 
-let vr = false, room = true, gyro = false, id, L, R, A;
+let vr = false, room = true, gyro = false, loading = true, id, L, R, A;
 let pw, ph, ox, oy, cw, ch, f;       // pane size, camera image placement, focal length (px)
 let sx = .5, sy = .5, sw = .6;       // screen centre + width, as fractions of the pane
 let lastP = null, lastD = 0, t0 = 0, moved = 0;
 let M = [1, 0, 0, 0, 1, 0, 0, 0, 1]; // phone → world rotation from the gyro
-const cams = [], scr = [], holders = [], cuts = [], rays = [];
+const cams = [], scr = [], holders = [], cuts = [], rays = [], hints = [];
 
 const size = () => {
   pw = Math.round(innerWidth / (vr ? 2 : 1)); ph = innerHeight;
@@ -83,14 +84,16 @@ const anchor = () => A = toWorld([(sx * pw - pw / 2) / f, -(sy * ph - ph / 2) / 
 /* ---- draw the screen every frame ---- */
 function frame() {
   size();
-  let hide = false, roll = 0;
-  if (room && !A && gyro) anchor();
+  let hide = false, roll = 0, hint = '';
+  if (room && gyro && (loading || !A)) { sx = .5; sy = .5; anchor(); }   // stay in front of you until tracking is ready
   if (room && A) {
     const s = toView(A), u = toView([0, 0, 1]);
     if (s[2] < -.05) { sx = (pw / 2 + f * s[0] / -s[2]) / pw; sy = (ph / 2 - f * s[1] / -s[2]) / ph; }
     else hide = true;
+    hint = hide ? (s[0] < 0 ? '← screen' : 'screen →') : sx < 0 ? '← screen' : sx > 1 ? 'screen →' : sy < 0 ? '↑ screen' : sy > 1 ? '↓ screen' : '';
     roll = Math.atan2(-u[0], u[1]);
   }
+  hints.forEach(h => h.textContent = hint);
   scr.forEach(e => {
     e.style.display = hide ? 'none' : '';
     e.style.width = sw * pw + 'px';
@@ -105,6 +108,7 @@ function frame() {
 /* ---- buttons (touch, or quick pinch with the hand ray) ---- */
 document.addEventListener('click', async e => {
   const a = e.target.dataset && e.target.dataset.a;
+  if (a == 'center') { sx = .5; sy = .5; anchor(); }
   if (a == 'room') {
     room = !room; if (room) anchor();
     document.querySelectorAll('[data-a=room]').forEach(b => b.textContent = room ? 'Follow view' : 'Fix in room');
@@ -161,8 +165,8 @@ document.getElementById('go').onclick = async () => { try {
     e.append(v, s, c);
     e.insertAdjacentHTML('beforeend',
       '<svg class="ray">' + '<g style="display:none"><line/><circle r="12"/></g>'.repeat(2) + '</svg>' +
-      '<div class="bar"><button data-a="vr">VR view</button><button data-a="room">Follow view</button></div>');
-    cams.push(v); scr.push(s); holders.push(h); cuts.push(c); rays.push(e.querySelector('.ray'));
+      '<div class="hint"></div><div class="bar"><button data-a="vr">VR view</button><button data-a="center">Recenter</button><button data-a="room">Follow view</button></div>');
+    cams.push(v); scr.push(s); holders.push(h); cuts.push(c); rays.push(e.querySelector('.ray')); hints.push(e.querySelector('.hint'));
   });
   await cams[0].play();
 
@@ -182,6 +186,7 @@ document.getElementById('go').onclick = async () => { try {
 /* ---- hands: ray from the fingertip, pinch to click / drag / resize, hand cut-out over the screen ---- */
 function onHands(r) {
   msg.textContent = '';
+  loading = false;
   size();
   const P = l => ({ x: ox + l.x * cw, y: oy + l.y * ch });
   const H = (r.multiHandLandmarks || []).map(l => l.map(P));
