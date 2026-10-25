@@ -109,6 +109,20 @@ document.addEventListener('click', async e => {
     room = !room; if (room) anchor();
     document.querySelectorAll('[data-a=room]').forEach(b => b.textContent = room ? 'Follow view' : 'Fix in room');
   }
+  if (a == 'vr') {
+    vr = !vr; vrEl.classList.toggle('one', !vr);
+    document.querySelectorAll('[data-a=vr]').forEach(b => b.textContent = vr ? 'Normal view' : 'VR view');
+    if (vr) {
+      R = R || await makePlayer(holders[1]);
+      R.mute(); R.seekTo(L.getCurrentTime(), true);
+      L.getPlayerState() == 1 ? R.playVideo() : R.pauseVideo();
+    } else if (R) R.pauseVideo();
+  }
+});
+
+const makePlayer = h => new Promise(res => {
+  const p = new YT.Player(h, {
+    width: '100%', height: '100%', videoId: id,
     playerVars: { controls: 0, playsinline: 1, rel: 0, disablekb: 1 },
     events: { onReady: () => res(p) }
   });
@@ -226,5 +240,4 @@ function onHands(r) {
     lastP = null; lastD = 0;
   }
 }
-                 </script>
-                 
+</script>
