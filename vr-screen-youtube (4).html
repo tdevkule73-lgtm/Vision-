@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>VR screen (YouTube)</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;color:#eee;font-family:system-ui,sans-serif}
+  #ui{position:fixed;inset:0;z-index:9;background:#000;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;text-align:center;padding:0 24px}
+  #ui input{font:inherit;width:100%;max-width:420px;padding:10px;border-radius:8px;border:1px solid #555;background:#111;color:#eee}
+  #ui button{font:inherit;font-size:18px;padding:12px 32px;border:0;border-radius:8px;background:#3ddc97;color:#000}
+  #vr{display:flex;height:100%}
+  .eye{position:relative;width:50vw;height:100%;overflow:hidden}
+  .eye video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .scr{position:absolute}
+  .dot{position:absolute;width:24px;height:24px;margin:-12px;border-radius:50%;opacity:.85}
+</style>
+
+<div id="ui">
+  <div>Paste a YouTube link, then put the phone in the headset.</div>
+  <input id="link" type="url" placeholder="https://youtube.com/watch?v=...">
+  <button id="go">Start</button>
+</div>
+<div id="vr"><div class="eye"></div><div class="eye"></div></div>
+
+<script>
+const apiReady = new Promise(r => window.onYouTubeIframeAPIReady = r);
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script>
+const eyes = [...document.querySelectorAll('.eye')];
+const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+let pw, ph;                          // size of one eye pane (px)
+let sx = .5, sy = .5, sw = .6;       // screen centre + width, as fractions of the pane
+let lastP = null, lastD = 0, t0 = 0, moved = 0;
+let L, R;                            // left-eye and right-eye YouTube players
+const cams = [], scr = [], holders = [], dots = [];
+
+const size = () => { pw = innerWidth / 2; ph = innerHeight; };
+const layout = () => scr.forEach(s => {
+  s.style.width = sw * pw + 'px';
+  s.style.height = sw * pw * 9 / 16 + 'px';
+  s.style.left = (sx - sw / 2) * pw + 'px';
+  s.style.top = sy * ph - sw * pw * 9 / 32 + 'px';
+});
+
+document.getElementById('go').onclick = async () => {
+  const id = document.getElementById('link').value.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/)[1];
+  await document.documentElement.requestFullscreen().catch(() => {});
+  await screen.orientation.lock('landscape').catch(() => {});
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'environment', width: 1280, height: 720 }
+  });
+  document.getElementById('ui').remove();
+
+  eyes.forEach(e => {
+    const v = document.createElement('video');
+    v.srcObject = stream;
+    v.muted = v.playsInline = v.autoplay = true;
+    const s = document.createElement('div');
+    s.className = 'scr';
+    const h = document.createElement('div');
+    s.append(h);
+    e.append(v, s);
+    cams.push(v); scr.push(s); holders.push(h);
+    [0, 1].forEach(i => {
+      const d = document.createElement('div');
+      d.className = 'dot';
+      e.append(d);
+      (dots[i] ??= []).push(d);
+    });
+  });
+  await cams[0].play();
+
+  await apiReady;
+  ([L, R] = await Promise.all(holders.map(h => new Promise(res => {
+    const p = new YT.Player(h, {
+      width: '100%', height: '100%', videoId: id,
+      playerVars: { controls: 0, playsinline: 1, rel: 0, disablekb: 1 },
+      events: { onReady: () => res(p) }
+    });
+  }))));
+  R.mute();
+  L.playVideo(); R.playVideo();
+  setInterval(() => {                       // keep the right eye in step with the left
+    const t = L.getCurrentTime();
+    if (Math.abs(R.getCurrentTime() - t) > .15) R.seekTo(t, true);
+  }, 500);
+
+  size(); layout();
+
+  const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}` });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 0 });
+  hands.onResults(onHands);
+  for (;;) await hands.send({ image: cams[0] });
+};
+
+function onHands(r) {
+  size();
+  const H = r.multiHandLandmarks || [];
+  const vw = cams[0].videoWidth, vh = cams[0].videoHeight, k = Math.max(pw / vw, ph / vh);
+  const P = l => ({ x: (pw - vw * k) / 2 + l.x * vw * k, y: (ph - vh * k) / 2 + l.y * vh * k });
+
+  dots.flat().forEach(d => d.style.display = 'none');
+  const pinch = [];
+  H.forEach((l, i) => {
+    const p = P(l[8]);
+    const pinched = D(l[4], l[8]) < .35 * D(l[0], l[9]);
+    dots[i].forEach(d => {
+      d.style.display = 'block';
+      d.style.left = p.x + 'px';
+      d.style.top = p.y + 'px';
+      d.style.background = pinched ? '#3ddc97' : '#fff';
+    });
+    if (pinched) pinch.push(p);
+  });
+
+  const [a, b] = pinch;
+  if (pinch.length == 2) {                       // two-hand pinch: resize
+    if (lastD) sw *= D(a, b) / lastD;
+    lastD = D(a, b); lastP = null;
+  } else if (pinch.length == 1) {                // one-hand pinch: drag
+    if (lastP) { sx += (a.x - lastP.x) / pw; sy += (a.y - lastP.y) / ph; moved += D(a, lastP); }
+    else { t0 = Date.now(); moved = lastD ? 1e9 : 0; }
+    lastP = a; lastD = 0;
+  } else {                                       // released: quick pinch = play/pause
+    if (lastP && Date.now() - t0 < 400 && moved < 30) {
+      const playing = L.getPlayerState() == 1;
+      [L, R].forEach(p => playing ? p.pauseVideo() : p.playVideo());
+    }
+    lastP = null; lastD = 0;
+  }
+  layout();
+}
+</script>
